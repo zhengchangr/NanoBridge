@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>NanoBridge</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside>
+    <div class="brand"><img src="assets/icon.png" alt="绿色 iPod 图标"><h1>NanoBridge</h1><p>网易云 → iPod nano</p></div>
+    <div class="rule"></div>
+    <ol class="steps"><li><span>＋</span>添加音乐</li><li><span>≋</span>解码 NCM</li><li><span>↻</span>转换为 AAC</li><li class="muted"><span>⇢</span>导入 iPod</li></ol>
+    <div class="settings"><h2>输出设置</h2><label class="rate">AAC <select id="bitrate" aria-label="AAC 码率"><option value="128">128 kbps</option><option value="192">192 kbps</option><option value="256" selected>256 kbps</option></select></label><p>AAC-LC · M4A<br>44.1 kHz · 立体声</p><button id="pick-output" class="link">更改输出文件夹</button><div id="output-folder" class="folder-path"></div></div>
+    <div class="rule"></div><button id="guide-button" class="link guide-link">ⓘ iPod 导入指南</button><small>Windows 64 位 · 0.1</small>
+  </aside>
+  <main>
+    <header><div><h2>让音乐，再次随身。</h2><p>链接下载 / 本地导入 → NCM 解码 → AAC</p></div><div class="account"><button id="login-button">▦ 网易云登录</button><span id="account-status">未登录 · 可尝试下载免费歌曲</span></div></header>
+    <section class="source-card" aria-label="添加音乐">
+      <div class="source-top"><h3>♪ 从这里开始</h3><div class="buttons"><button id="pick-files">添加文件</button><button id="pick-folder">添加文件夹</button></div></div>
+      <div class="source-input"><textarea id="links" rows="2" placeholder="粘贴网易云歌曲或歌单链接，每行一条…" aria-label="网易云歌曲或歌单链接"></textarea><button id="resolve">加入队列</button></div>
+      <p>支持拖入文件。下载以账号权限为准；源文件保留。</p>
+    </section>
+    <section class="queue-section"><div class="queue-heading"><h3>音乐队列 <span id="count">0</span></h3><button id="clear" class="link">清空队列</button></div><div id="queue" aria-label="音乐队列"><div class="empty"><div class="empty-symbol">♫</div><h3>下一站，你的 iPod</h3><p>添加链接，或拖入 NCM、FLAC、MP3 等音乐文件。</p></div></div></section>
+    <footer><div class="footer-row"><div id="status" role="status">把喜欢的音乐，带回口袋。</div><button id="run" class="primary" disabled>▶ 转换为 AAC</button><button id="stop" hidden>停止</button></div><div class="footer-note"><span>转换完成后，可用 TunesReloaded 将 AAC 导入 iPod。</span><button id="ipod-tool" class="link">打开 iPod 导入工具 ↗</button></div></footer>
+  </main>
+  <dialog id="login-dialog" aria-labelledby="login-title"><div class="modal"><h2 id="login-title">登录网易云音乐</h2><p>使用手机扫码，登录凭证在本机加密保存。</p><div class="qr-box"><img id="qr-image" hidden alt="网易云登录二维码"><span id="qr-loading">正在生成二维码…</span></div><p id="login-message" role="status">正在生成二维码…</p><div class="modal-buttons"><button id="login-refresh">刷新二维码</button><button id="login-close">关闭</button></div></div></dialog>
+  <dialog id="guide-dialog" aria-labelledby="guide-title"><div class="modal guide"><h2 id="guide-title">把音乐导入 iPod nano</h2><p>NanoBridge 已完成 AAC 音频准备。当前版本通过独立导入工具传输，不需要 Apple“音乐”App。</p><ol><li>用数据线连接 iPod，并确保 Windows 能看到它的磁盘。</li><li>在 Chrome 或 Edge 打开 TunesReloaded，按页面提示识别设备并选择 iPod 根目录。</li><li>添加 NanoBridge 输出文件夹中的 M4A 文件，点击 Sync，等待工具报告完成后安全弹出。</li></ol><p class="note">应用目前尚未内置设备数据库直写。这里只会将转换状态标记为“已转换”，不会将音频准备当成已传输。</p><div class="modal-buttons"><button id="guide-open" class="primary">打开导入工具 ↗</button><button id="guide-close">知道了</button></div></div></dialog>
+  <dialog id="error-dialog" aria-labelledby="error-title"><div class="modal"><h2 id="error-title">处理提示</h2><p id="error-message"></p><button id="error-close">知道了</button></div></dialog>
+  <script src="renderer.js"></script>
+</body>
+</html>
