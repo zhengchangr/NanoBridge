@@ -265,25 +265,29 @@ final class BridgeModel: ObservableObject {
 }
 
 struct ContentView: View {
-    @StateObject private var model = BridgeModel()
+    private enum MusicSource: String, CaseIterable {
+        case local = "本地文件", online = "网易云链接"
+    }
+    @ObservedObject var model: BridgeModel
+    @ObservedObject var updates: AppUpdater
     @State private var showLogin = false
     @State private var showGuide = false
+    @State private var showSettings = false
+    @State private var showUpdates = false
+    @State private var source = MusicSource.local
     private let accent = Color(red: 0.13, green: 0.43, blue: 0.37)
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            Divider()
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                sourceCard
-                queue
-                footer
-            }
-            .padding(28)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(alignment: .leading, spacing: 22) {
+            header
+            sourceCard
+            queue
+            footer
         }
-        .frame(minWidth: 980, minHeight: 720)
+        .padding(28)
+        .frame(maxWidth: 1160, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: 900, minHeight: 720)
         .background(Color(nsColor: .windowBackgroundColor))
         .tint(accent)
         .sheet(isPresented: $showLogin, onDismiss: { model.loginTask?.cancel() }) { login }
@@ -298,25 +302,22 @@ struct ContentView: View {
         }
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            VStack(alignment: .leading, spacing: 7) {
-                Image(systemName: "ipod").font(.system(size: 36, weight: .light)).foregroundStyle(accent)
-                Text("NanoBridge").font(.system(size: 22, weight: .semibold, design: .rounded))
-                Text("网易云 → iPod nano").font(.caption).foregroundStyle(.secondary)
-            }
-            Divider()
-            VStack(alignment: .leading, spacing: 18) {
-                Label("添加音乐", systemImage: "plus.circle")
-                Label("解码 NCM", systemImage: "waveform")
-                Label("转换为 AAC", systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
-                Label("导入音乐资料库", systemImage: "music.note.list")
-                Label("Finder 同步至 iPod", systemImage: "cable.connector")
-                    .foregroundStyle(.secondary)
-            }.font(.system(size: 12))
-            Spacer()
+    private func stepTitle(_ number: Int, _ title: String) -> some View {
+        HStack(spacing: 10) {
+            Text("\(number)")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(accent)
+                .frame(width: 25, height: 25)
+                .background(accent.opacity(0.09), in: Circle())
+            Text(title).font(.system(size: 14, weight: .semibold))
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var outputSettings: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("输出设置").font(.headline)
             VStack(alignment: .leading, spacing: 12) {
-                Text("输出设置").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Picker("AAC", selection: $model.bitrate) {
                     Text("128 kbps").tag(128)
                     Text("192 kbps").tag(192)
@@ -330,68 +331,134 @@ struct ContentView: View {
                 Text(model.outputFolder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
                     .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
             }.disabled(model.running || model.resolving)
-            Divider()
-            Button { showGuide = true } label: { Label("iPod 同步指南", systemImage: "questionmark.circle") }
-                .buttonStyle(.plain).font(.caption)
-            Text("0.1 · 为口袋里的音乐而做").font(.system(size: 10)).foregroundStyle(.tertiary)
+            HStack {
+                Spacer()
+                Button("完成") { showSettings = false }
+            }
         }
         .padding(24)
-        .frame(width: 220, alignment: .leading)
-        .background(accent.opacity(0.035))
+        .frame(width: 320, alignment: .leading)
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
+        HStack(spacing: 14) {
+            Image(systemName: "ipod")
+                .font(.system(size: 31, weight: .light))
+                .foregroundStyle(accent)
+                .frame(width: 48, height: 48)
+                .background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
             VStack(alignment: .leading, spacing: 6) {
-                Text("让音乐，再次随身。")
-                    .font(.system(size: 27, weight: .semibold, design: .rounded))
-                Text("链接下载 / 本地导入 → NCM 解码 → AAC → 音乐资料库")
+                Text("把音乐，带回 iPod。")
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                Text("先添加音乐，转换后再通过 Finder 同步。")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 6) {
-                if model.loggedIn {
-                    Menu { Button("退出登录", action: model.logout) } label: { Label("已登录", systemImage: "checkmark.seal") }
-                        .disabled(model.running || model.resolving)
-                } else {
-                    Button { showLogin = true; model.beginLogin() } label: { Label("网易云登录", systemImage: "qrcode") }
-                        .disabled(model.running || model.resolving)
-                }
-                Text(model.accountStatus).font(.system(size: 10)).foregroundStyle(.secondary)
+            VStack(alignment: .trailing, spacing: 7) {
+                Text("NanoBridge").font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(accent)
+                Button { showUpdates = true } label: { Label(updates.installationDeferred ? "更新待安装" : "检查更新", systemImage: "arrow.down.circle") }
+                    .buttonStyle(.link).font(.caption)
+                    .popover(isPresented: $showUpdates) { updateSettings }
+            }
+        }
+    }
+
+    private var updateSettings: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("软件更新").font(.headline)
+            Text("当前版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")")
+                .font(.caption).foregroundStyle(.secondary)
+            Toggle("自动检查新版本", isOn: Binding(get: { updates.automaticallyChecks }, set: updates.setAutomaticChecks))
+            Toggle("自动下载并在退出时安装", isOn: Binding(get: { updates.automaticallyDownloads }, set: updates.setAutomaticDownloads))
+                .disabled(!updates.automaticallyChecks)
+            Text(updates.installationDeferred ? "更新已准备好。处理完成并清空队列后，将自动安装并重新启动。" : "从 GitHub 最新 Release 获取更新，验证签名后安装并重新启动。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if model.running || model.resolving {
+                Text("音乐正在处理中，任务结束后即可检查更新。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Link("发布记录", destination: URL(string: "https://github.com/zhengchangr/NanoBridge/releases")!)
+                    .font(.caption)
+                Spacer()
+                Button("立即检查") { showUpdates = false; updates.checkForUpdates() }
+                    .disabled(!updates.canCheck || model.running || model.resolving)
+            }
+        }
+        .padding(24).frame(width: 350)
+    }
+
+    private var account: some View {
+        HStack(spacing: 10) {
+            Text(model.accountStatus).font(.system(size: 11)).foregroundStyle(.secondary)
+            Spacer()
+            if model.loggedIn {
+                Menu { Button("退出登录", action: model.logout) } label: { Label("已登录", systemImage: "checkmark.seal") }
+                    .disabled(model.running || model.resolving)
+            } else {
+                Button { showLogin = true; model.beginLogin() } label: { Label("网易云登录", systemImage: "qrcode") }
+                    .disabled(model.running || model.resolving)
             }
         }
     }
 
     private var sourceCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Label("从这里开始", systemImage: "music.note").font(.system(size: 13, weight: .semibold))
+                stepTitle(1, "添加音乐")
                 Spacer()
-                Button(action: model.chooseFiles) { Label("添加本地文件 / 文件夹", systemImage: "folder.badge.plus") }
+                Picker("音乐来源", selection: $source) {
+                    ForEach(MusicSource.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented).frame(width: 240)
             }
-            HStack(alignment: .center, spacing: 12) {
-                TextEditor(text: $model.links)
-                    .font(.system(size: 12))
-                    .scrollContentBackground(.hidden)
-                    .padding(6)
-                    .frame(height: 55)
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(alignment: .topLeading) {
-                        if model.links.isEmpty {
-                            Text("粘贴网易云歌曲或歌单链接，每行一条…")
-                                .font(.system(size: 12)).foregroundStyle(.tertiary).padding(11).allowsHitTesting(false)
-                        }
+            if source == .local {
+                HStack(spacing: 18) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 30, weight: .light)).foregroundStyle(accent)
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("把音乐文件拖到窗口，或从电脑选择")
+                            .font(.system(size: 15, weight: .medium))
+                        Text("支持 NCM、FLAC、MP3、M4A 等格式，也可添加整个文件夹。")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
-                    .accessibilityLabel("网易云歌曲或歌单链接")
-                Button(action: model.resolveLinks) {
-                    if model.resolving { ProgressView().controlSize(.small).frame(width: 68) }
-                    else { Text("加入队列").frame(width: 68) }
-                }.disabled(model.links.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.resolving)
+                    Spacer(minLength: 12)
+                    Button(action: model.chooseFiles) {
+                        Label("选择文件 / 文件夹", systemImage: "plus")
+                            .padding(.horizontal, 8).padding(.vertical, 6)
+                    }.buttonStyle(.borderedProminent)
+                }
+                .padding(22)
+                .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+                .background(accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(accent.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    account
+                    HStack(alignment: .center, spacing: 12) {
+                        TextEditor(text: $model.links)
+                            .font(.system(size: 12))
+                            .scrollContentBackground(.hidden)
+                            .padding(6)
+                            .frame(height: 55)
+                            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(alignment: .topLeading) {
+                                if model.links.isEmpty {
+                                    Text("粘贴网易云歌曲或歌单链接，每行一条…")
+                                        .font(.system(size: 12)).foregroundStyle(.tertiary).padding(11).allowsHitTesting(false)
+                                }
+                            }
+                            .accessibilityLabel("网易云歌曲或歌单链接")
+                        Button(action: model.resolveLinks) {
+                            if model.resolving { ProgressView().controlSize(.small).frame(width: 68) }
+                            else { Text("加入队列").frame(width: 68) }
+                        }.disabled(model.links.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.resolving)
+                    }
+                    Text("歌曲或歌单链接，每行一条。下载以账号权限为准。")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
             }
-            Text("也可以把音乐拖进窗口。下载以账号权限为准；不把试听片段当作完整歌曲。")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
         }
-        .padding(16)
+        .padding(20)
         .background(.background, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
         .disabled(model.running || model.resolving)
@@ -400,17 +467,16 @@ struct ContentView: View {
     private var queue: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("音乐队列").font(.system(size: 13, weight: .semibold))
-                Text("\(model.items.count)").font(.caption).foregroundStyle(.secondary)
+                stepTitle(2, model.importMusic ? "转换并导入" : "转换音乐")
+                Text("\(model.items.count) 首音乐").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("清空队列") { model.items.removeAll(); model.status = "把喜欢的音乐，带回口袋。" }
                     .buttonStyle(.link).font(.caption).disabled(model.running || model.resolving || model.items.isEmpty)
             }
             if model.items.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "music.note.house").font(.system(size: 38, weight: .ultraLight)).foregroundStyle(accent.opacity(0.65))
-                    Text("下一站，你的 iPod").font(.system(size: 17, weight: .medium, design: .rounded))
-                    Text("添加链接，或拖入 NCM、FLAC、MP3 等音乐文件。")
+                VStack(spacing: 8) {
+                    Text("还没有添加音乐").font(.system(size: 14, weight: .medium))
+                    Text("从上方添加后，在这里查看队列和转换进度。")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -449,25 +515,37 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Divider()
             HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        Text("AAC · \(model.bitrate) kbps · " + (model.importMusic ? "自动导入“音乐”" : "仅保存文件"))
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                        Button { showSettings = true } label: { Label("输出设置", systemImage: "slider.horizontal.3") }
+                            .buttonStyle(.link).font(.caption)
+                            .disabled(model.running || model.resolving)
+                            .popover(isPresented: $showSettings) { outputSettings }
+                    }
+                    Text(model.items.isEmpty && model.status == "把喜欢的音乐，带回口袋。" ? "先添加音乐，再开始转换。" : model.status)
+                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                }
                 if model.running { ProgressView().controlSize(.small) }
-                Text(model.status).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
                 Spacer()
                 if model.running {
                     Button("停止") { model.task?.cancel(); model.status = "正在停止，当前转换完成后退出…" }
                 } else {
                     Button(action: model.run) {
-                        Label(model.importMusic ? "转换并导入音乐" : "转换为 AAC", systemImage: "play.fill")
-                            .padding(.horizontal, 6).padding(.vertical, 3)
+                        Label(model.importMusic ? "开始转换并导入" : "开始转换为 AAC", systemImage: "play.fill")
+                            .padding(.horizontal, 10).padding(.vertical, 6)
                     }.buttonStyle(.borderedProminent).disabled(model.pending == 0 || model.resolving)
                 }
             }
-            HStack {
-                Label("iPod 最后一步：在 Finder 选择 NanoBridge 播放列表并同步。", systemImage: "info.circle")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            Divider().padding(.vertical, 4)
+            HStack(spacing: 14) {
+                stepTitle(3, "同步至 iPod")
+                Text(model.importMusic ? "转换完成后，在 Finder 同步 NanoBridge 播放列表。" : "仅保存文件时，请先将输出文件导入“音乐”，再通过 Finder 同步。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
-                Button("查看步骤") { showGuide = true }.buttonStyle(.link).font(.system(size: 10))
+                Button("查看同步步骤") { showGuide = true }.buttonStyle(.link).font(.caption)
             }
         }
     }
@@ -518,11 +596,26 @@ struct ContentView: View {
 @main
 struct NanoBridgeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    @StateObject private var model: BridgeModel
+    @StateObject private var updates: AppUpdater
+
+    init() {
+        let model = BridgeModel()
+        _model = StateObject(wrappedValue: model)
+        _updates = StateObject(wrappedValue: AppUpdater(model: model))
+    }
+
     var body: some Scene {
-        WindowGroup { ContentView() }
+        WindowGroup { ContentView(model: model, updates: updates) }
             .windowStyle(.hiddenTitleBar)
             .defaultSize(width: 1040, height: 760)
-            .commands { CommandGroup(replacing: .newItem) {} }
+            .commands {
+                CommandGroup(replacing: .newItem) {}
+                CommandGroup(after: .appInfo) {
+                    Button("检查更新…", action: updates.checkForUpdates)
+                        .disabled(!updates.canCheck || model.running || model.resolving)
+                }
+            }
     }
 }
 

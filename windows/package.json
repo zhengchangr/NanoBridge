@@ -7,11 +7,14 @@
   "scripts": {
     "prestart": "node node_modules/electron/install.js",
     "start": "electron .",
-    "test": "node --test test.cjs",
+    "test": "node --test test.cjs updater.test.cjs",
     "test:live": "node test-live.cjs",
     "package:win": "node package-win.cjs"
   },
-  "dependencies": { "qrcode": "1.5.4" },
+  "dependencies": {
+    "@electron-internal/extract-zip": "1.0.8",
+    "qrcode": "1.5.4"
+  },
   "devDependencies": {
     "electron": "45.3.4",
     "ffmpeg-static": "5.3.0",

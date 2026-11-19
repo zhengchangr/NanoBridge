@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const execFile = require('node:util').promisify(require('node:child_process').execFile);
 const { createRequire } = require('node:module');
+const { signRelease } = require('./sign-release.cjs');
 
 async function download(url, file) {
   try { if ((await fs.stat(file)).size) return; } catch { }
@@ -85,22 +86,26 @@ async function packageWindows() {
   else execFileSync('unzip', ['-q', electronZip, '-d', output]);
   const appDirectory = path.join(output, 'resources', 'app');
   await fs.mkdir(appDirectory, { recursive: true });
-  for (const file of ['main.cjs', 'preload.cjs', 'core.cjs', 'renderer.js', 'index.html', 'style.css', 'README.md']) await fs.copyFile(file, path.join(appDirectory, file));
+  for (const file of ['main.cjs', 'preload.cjs', 'core.cjs', 'updater.cjs', 'update-helper.cjs', 'update-config.json', 'renderer.js', 'index.html', 'style.css', 'README.md']) await fs.copyFile(file, path.join(appDirectory, file));
   await fs.cp('assets', path.join(appDirectory, 'assets'), { recursive: true });
   await fs.writeFile(path.join(appDirectory, 'package.json'), JSON.stringify({ name: pkg.name, version: pkg.version, main: pkg.main, description: pkg.description }));
-  // Copy only qrcode's production dependency tree, including each package's license.
+  // Copy only production dependencies, including each package's license.
   const copied = new Set();
   async function copyPackage(name, from) {
     if (copied.has(name)) return;
     const req = createRequire(path.join(from, 'package.json'));
-    const manifest = req.resolve(name + '/package.json');
+    let manifest;
+    try { manifest = req.resolve(name + '/package.json'); }
+    catch (error) { if (error.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') throw error; manifest = path.join(path.dirname(req.resolve(name)), 'package.json'); }
     const directory = path.dirname(manifest);
     const info = JSON.parse(await fs.readFile(manifest));
     copied.add(name);
-    await fs.cp(directory, path.join(appDirectory, 'node_modules', name), { recursive: true, filter: source => !source.includes(path.sep + 'node_modules' + path.sep + name + path.sep + 'node_modules') });
+    await fs.cp(directory, path.join(appDirectory, 'node_modules', name), { recursive: true, filter: source =>
+      !source.includes(path.sep + 'node_modules' + path.sep + name + path.sep + 'node_modules') &&
+      (!source.endsWith('.node') || source.endsWith('index.win32-x64-msvc.node')) });
     for (const dependency of Object.keys(info.dependencies || {})) await copyPackage(dependency, directory);
   }
-  await copyPackage('qrcode', __dirname);
+  for (const dependency of Object.keys(pkg.dependencies)) await copyPackage(dependency, __dirname);
   await fs.mkdir(path.join(output, 'resources', 'bin'), { recursive: true });
   await pipeline(createReadStream(ffmpegGzip), createGunzip(), createWriteStream(path.join(output, 'resources', 'bin', 'ffmpeg.exe')));
   const notices = path.join(output, 'third-party-notices'); await fs.mkdir(notices);
@@ -116,8 +121,9 @@ async function packageWindows() {
   for (const icon of icons) ResEdit.Resource.IconGroupEntry.replaceIconsForResource(resources.entries, icon.id, icon.lang, iconFile.icons.map(i => i.data));
   const versions = ResEdit.Resource.VersionInfo.fromEntries(resources.entries);
   for (const info of versions) {
-    info.setFileVersion(0, 1, 0, 0, 1033);
-    info.setProductVersion(0, 1, 0, 0, 1033);
+    const [major, minor, patch] = pkg.version.split('.').map(Number);
+    info.setFileVersion(major, minor, patch, 0, 1033);
+    info.setProductVersion(major, minor, patch, 0, 1033);
     info.setStringValues({ lang: 1033, codepage: 1200 }, { FileDescription: 'NanoBridge', ProductName: 'NanoBridge', InternalName: 'NanoBridge', OriginalFilename: 'NanoBridge.exe', CompanyName: 'NanoBridge' });
     info.outputToResourceEntries(resources.entries);
   }
@@ -133,7 +139,9 @@ async function packageWindows() {
   } else execFileSync('zip', ['-q', '-r', archive, path.basename(output)], { cwd: path.dirname(output) });
   const checksum = await sha256(archive);
   await fs.writeFile(archive + '.sha256', `${checksum}  ${path.basename(archive)}\n`);
+  const manifest = await signRelease(archive, pkg.version);
   console.log(archive);
+  console.log('Upload alongside the ZIP: ' + manifest + ' and ' + manifest + '.sig');
   console.log('SHA-256: ' + checksum);
 }
 module.exports = { download };

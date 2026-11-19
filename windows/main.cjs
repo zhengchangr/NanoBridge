@@ -7,22 +7,35 @@ const { pathToFileURL } = require('node:url');
 const { Worker } = require('node:worker_threads');
 const QRCode = require('qrcode');
 const { FORMATS, NetEase } = require('./core.cjs');
+const { WindowsUpdater, releaseURL } = require('./updater.cjs');
 
 app.setName('NanoBridge');
 if (!app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', path.join(app.getPath('appData'), 'NanoBridge'));
 const api = new NetEase();
 const state = { items: [], busy: false, loggedIn: false, status: '把喜欢的音乐，带回口袋。', bitrate: 256, outputFolder: '', loginMessage: '', qrImage: null };
-let window, worker, stopping = false, loginController, loginKey, resolveController, allowQuit = false;
+let window, worker, stopping = false, loginController, loginKey, resolveController, allowQuit = false, updater, installing = false;
+let updatePreferences = {}, settingsWrite = Promise.resolve();
+let skipUpdateOnQuit = false;
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 const credentialPath = () => path.join(app.getPath('userData'), 'login.bin');
 const ffmpegPath = () => app.isPackaged ? path.join(process.resourcesPath, 'bin', 'ffmpeg.exe') : require('ffmpeg-static');
-function emit() { if (window && !window.isDestroyed()) window.webContents.send('state', state); }
+function emit() {
+  if (window && !window.isDestroyed()) window.webContents.send('state', state);
+  if (updater?.installRequested && !updater.occupied && !updater.active) void installUpdate();
+}
 function update(patch) { Object.assign(state, patch); emit(); }
-async function saveSettings() {
-  await fs.mkdir(app.getPath('userData'), { recursive: true });
-  const temporary = settingsPath() + '.tmp';
-  await fs.writeFile(temporary, JSON.stringify({ bitrate: state.bitrate, outputFolder: state.outputFolder }));
-  await fs.rename(temporary, settingsPath());
+function saveSettings() {
+  const preferences = updater?.state || updatePreferences;
+  const data = JSON.stringify({ bitrate: state.bitrate, outputFolder: state.outputFolder, update: {
+    automaticChecks: preferences.automaticChecks, automaticDownloads: preferences.automaticDownloads, lastCheck: preferences.lastCheck
+  } });
+  settingsWrite = settingsWrite.catch(() => {}).then(async () => {
+    await fs.mkdir(app.getPath('userData'), { recursive: true });
+    const temporary = settingsPath() + '.tmp';
+    await fs.writeFile(temporary, data);
+    await fs.rename(temporary, settingsPath());
+  });
+  return settingsWrite;
 }
 async function loadSettings() {
   state.outputFolder = path.join(app.getPath('music'), 'NanoBridge');
@@ -30,6 +43,7 @@ async function loadSettings() {
     const data = JSON.parse(await fs.readFile(settingsPath(), 'utf8'));
     if ([128, 192, 256].includes(data.bitrate)) state.bitrate = data.bitrate;
     if (typeof data.outputFolder === 'string' && path.isAbsolute(data.outputFolder)) state.outputFolder = data.outputFolder;
+    if (data.update && typeof data.update === 'object') updatePreferences = data.update;
   } catch { /* First launch or missing settings: use defaults. */ }
   try {
     const encrypted = await fs.readFile(credentialPath());
@@ -106,6 +120,7 @@ async function runQueue() {
 function register(name, handler, { busy = false } = {}) {
   ipcMain.handle(name, async (event, argument) => {
     if (event.sender !== window?.webContents || event.senderFrame?.url !== pathToFileURL(path.join(__dirname, 'index.html')).href) return { error: '无效的调用来源' };
+    if (installing && name !== 'state') return { error: '正在准备更新，请稍候' };
     if (state.busy && !busy) return { error: '当前任务还在处理中' };
     try { return { value: await handler(argument) }; }
     catch (error) { return { error: error.message }; }
@@ -166,6 +181,15 @@ register('clear', () => update({ items: [], status: '把喜欢的音乐，带回
 register('run', () => { runQueue().catch(error => update({ status: error.message, busy: false })); });
 register('stop', () => { stopping = true; worker?.postMessage('cancel'); resolveController?.abort(); update({ status: '正在停止当前任务…' }); }, { busy: true });
 register('ipod-tool', () => shell.openExternal('https://tunesreloaded.com'), { busy: true });
+register('update-releases', () => shell.openExternal(releaseURL), { busy: true });
+register('update-check', async () => { try { await updater.check(); } finally { await saveSettings(); } }, { busy: true });
+register('update-download', () => updater.download(), { busy: true });
+register('update-install', () => updater.requestInstall(), { busy: true });
+register('update-settings', async data => {
+  if (!data || !['automaticChecks', 'automaticDownloads'].every(key => data[key] == null || typeof data[key] === 'boolean')) throw new Error('更新设置无效');
+  for (const key of ['automaticChecks', 'automaticDownloads']) if (typeof data[key] === 'boolean') updater.state[key] = data[key];
+  await saveSettings(); emit();
+}, { busy: true });
 register('login-start', async () => {
   loginController?.abort();
   const controller = new AbortController(); loginController = controller;
@@ -207,21 +231,70 @@ register('logout', async () => {
   await fs.rm(credentialPath(), { force: true }); update({ loggedIn: false });
 });
 
+async function installUpdate() {
+  if (installing || !updater?.ready || !updater.state.supported || updater.occupied) return;
+  installing = true;
+  try {
+    const prepared = await updater.prepareInstall();
+    if (!prepared) return;
+    await saveSettings();
+    await updater.launchInstaller(prepared);
+    allowQuit = true;
+    app.quit();
+  } catch (error) {
+    skipUpdateOnQuit = true;
+    updater.installRequested = false;
+    updater.patch({ phase: 'ready', message: `更新未安装，当前版本保持不变。${error.message}` });
+  } finally { installing = false; }
+}
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else app.whenReady().then(async () => {
   await loadSettings();
+  const updateDirectory = path.join(app.getPath('userData'), 'updates');
+  updater = new WindowsUpdater({ version: app.getVersion(), directory: updateDirectory, target: path.dirname(process.execPath),
+    supported: process.platform === 'win32' && process.arch === 'x64' && app.isPackaged,
+    getActivity: () => ({ busy: state.busy, count: state.items.length }), changed: emit, preferences: updatePreferences });
+  state.update = updater.state;
+  await updater.restore();
   Menu.setApplicationMenu(null);
-  window = new BrowserWindow({ width: 1120, height: 800, minWidth: 940, minHeight: 680, title: 'NanoBridge', backgroundColor: '#f7faf9', icon: path.join(__dirname, 'assets', 'icon.png'), webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  window = new BrowserWindow({ width: 1040, height: 760, minWidth: 900, minHeight: 720, title: 'NanoBridge', backgroundColor: '#fff', icon: path.join(__dirname, 'assets', 'icon.png'), webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   window.on('close', async event => {
-    if (!state.busy || allowQuit) return;
+    if (allowQuit) return;
+    if (installing) { event.preventDefault(); return; }
+    if (!skipUpdateOnQuit && updater.ready && updater.state.supported && updater.state.automaticDownloads && !updater.occupied) {
+      event.preventDefault(); updater.installRequested = true; void installUpdate(); return;
+    }
+    if (!state.busy) return;
     event.preventDefault();
     const answer = await dialog.showMessageBox(window, { type: 'question', message: '音乐正在处理中', detail: '退出会停止当前任务，已完成的文件仍然保留。', buttons: ['继续处理', '停止并退出'], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) { allowQuit = true; stopping = true; await worker?.terminate(); app.quit(); }
   });
   await window.loadFile(path.join(__dirname, 'index.html'));
+  const updateId = app.commandLine.getSwitchValue('nanobridge-update-id');
+  if (/^[0-9a-f-]{36}$/.test(updateId)) {
+    const work = path.join(updateDirectory, updateId);
+    await fs.mkdir(work, { recursive: true });
+    await fs.writeFile(path.join(work, 'started.json'), JSON.stringify({ version: app.getVersion() }));
+    let attempts = 0, completed = false;
+    const cleanup = setInterval(async () => {
+      try {
+        if (!completed) { await fs.access(path.join(work, 'complete')); completed = true; }
+        await fs.rm(work, { recursive: true, force: true }); clearInterval(cleanup);
+      } catch { if (++attempts >= 24) clearInterval(cleanup); }
+    }, 5000);
+    cleanup.unref();
+  }
+  const checkAutomatically = async () => {
+    if (!updater.state.automaticChecks || state.busy || updater.active || Date.now() - updater.state.lastCheck < 86400000) return;
+    try { await updater.check(); } catch { /* Background errors remain visible in the update panel. */ }
+    try { await saveSettings(); } catch { /* Checking must not interrupt music processing. */ }
+  };
+  setTimeout(checkAutomatically, 5000).unref();
+  setInterval(checkAutomatically, 60 * 60 * 1000).unref();
 });
 app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
 app.on('window-all-closed', () => { loginController?.abort(); app.quit(); });

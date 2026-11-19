@@ -1,6 +1,6 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
-const methods = ['state', 'pick-files', 'pick-folder', 'drop-files', 'resolve', 'settings', 'pick-output', 'show-output', 'remove', 'clear', 'run', 'stop', 'ipod-tool', 'login-start', 'login-close', 'logout'];
+const methods = ['state', 'pick-files', 'pick-folder', 'drop-files', 'resolve', 'settings', 'pick-output', 'show-output', 'remove', 'clear', 'run', 'stop', 'ipod-tool', 'login-start', 'login-close', 'logout', 'update-check', 'update-download', 'update-install', 'update-settings', 'update-releases'];
 const api = {};
 for (const name of methods) api[name] = async argument => {
   const result = await ipcRenderer.invoke(name, argument);
